@@ -1,13 +1,39 @@
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5195').replace(/\/+$/, '');
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string> || {}),
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
+    headers,
   });
+
+  if (res.status === 401) {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/profile')) {
+        window.location.href = '/login';
+      }
+    }
+    const body: unknown = await res.json().catch(() => null);
+    const errMessage = (body as { error?: string })?.error || 'Unauthorized. Please log in.';
+    throw new Error(errMessage);
+  }
+
+  if (res.status === 403) {
+    const body: unknown = await res.json().catch(() => null);
+    const errMessage = (body as { error?: string })?.error || 'Forbidden: You do not have permission for this action.';
+    throw new Error(errMessage);
+  }
 
   if (!res.ok) {
     const body: unknown = await res.json().catch(() => null);
@@ -99,6 +125,7 @@ export interface Summary {
   totalDepartments: number;
   totalProjects: number;
   totalTasks: number;
+  totalTags?: number;
 }
 
 export interface DepartmentCreate {
@@ -195,6 +222,58 @@ export const tagApi = {
   update: (id: number, data: TagInput) =>
     apiFetch<Tag>(`/api/tags/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => apiFetch<null>(`/api/tags/${id}`, { method: 'DELETE' }),
+};
+
+// ── Auth & Account Types ───────────────────────────────────
+export interface AuthUser {
+  accountID: number;
+  fullName: string;
+  email: string;
+  role: number; // 0 = Staff, 1 = Admin
+  roleLabel: string;
+  createdDate?: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  account: AuthUser;
+}
+
+export interface RegisterInput {
+  fullName: string;
+  email: string;
+  password: string;
+}
+
+export interface AccountUpdateInput {
+  fullName: string;
+  role: number;
+  password?: string;
+}
+
+export interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+// ── Auth API ───────────────────────────────────────────────
+export const authApi = {
+  register: (data: RegisterInput) =>
+    apiFetch<AuthUser>('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+  login: (data: { email: string; password: string }) =>
+    apiFetch<LoginResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+  me: () => apiFetch<AuthUser>('/api/auth/me'),
+  changePassword: (data: ChangePasswordInput) =>
+    apiFetch<{ message: string }>('/api/auth/change-password', { method: 'POST', body: JSON.stringify(data) }),
+};
+
+// ── Account API (Admin Only) ───────────────────────────────
+export const accountApi = {
+  getAll: () => apiFetch<AuthUser[]>('/api/accounts'),
+  getById: (id: number) => apiFetch<AuthUser>(`/api/accounts/${id}`),
+  update: (id: number, data: AccountUpdateInput) =>
+    apiFetch<AuthUser>(`/api/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: number) => apiFetch<null>(`/api/accounts/${id}`, { method: 'DELETE' }),
 };
 
 // ── Label helpers ──────────────────────────────────────────

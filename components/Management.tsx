@@ -1,14 +1,17 @@
 'use client';
 
 import { FormEvent, ReactNode, useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Department, DepartmentCreate, Project, ProjectCreate, Tag, TagInput, Task, TaskCreate,
-  departmentApi, projectApi, tagApi, taskApi,
+  AuthUser, AccountUpdateInput,
+  departmentApi, projectApi, tagApi, taskApi, accountApi,
 } from '@/lib/api';
 import { ProjectStatusBadge, TagBadge, TaskPriorityBadge, TaskStatusBadge } from '@/components/Badges';
 import { useToast } from '@/components/ToastProvider';
+import { useAuth } from '@/lib/auth';
 
-type Entry = Department | Project | Task | Tag;
+type Entry = Department | Project | Task | Tag | AuthUser;
 type FormValue = string | string[] | boolean;
 type FormValues = Record<string, FormValue>;
 type Field = {
@@ -173,6 +176,66 @@ const resources: Record<string, Resource> = {
       { label: 'Color', render: entry => (entry as Tag).color || 'Default' },
     ],
   },
+  accounts: {
+    title: 'Account management',
+    description: 'View registered accounts, modify access roles, and delete inactive accounts.',
+    list: async () => accountApi.getAll(),
+    id: entry => (entry as AuthUser).accountID,
+    save: async (id, values) => {
+      if (id === null) throw new Error('New accounts must be created via Register.');
+      const data: AccountUpdateInput = {
+        fullName: String(values.fullName).trim(),
+        role: Number(values.role),
+        password: values.password ? String(values.password) : undefined,
+      };
+      return accountApi.update(id, data);
+    },
+    remove: id => accountApi.delete(id),
+    fields: [
+      { key: 'fullName', label: 'Full Name', required: true, maxLength: 100 },
+      {
+        key: 'role',
+        label: 'Role',
+        type: 'select',
+        required: true,
+        options: [
+          { value: '0', label: 'Staff (0)' },
+          { value: '1', label: 'Admin (1)' },
+        ],
+        read: entry => String((entry as AuthUser).role),
+      },
+      { key: 'password', label: 'New Password (leave empty to keep unchanged)', type: 'text', read: () => '' },
+    ],
+    columns: [
+      { label: 'Account ID', render: entry => <code>#{(entry as AuthUser).accountID}</code> },
+      { label: 'Full Name', render: entry => <strong>{(entry as AuthUser).fullName}</strong> },
+      { label: 'Email', render: entry => (entry as AuthUser).email },
+      {
+        label: 'Role',
+        render: entry => (
+          <span
+            style={{
+              padding: '2px 8px',
+              borderRadius: '4px',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              backgroundColor: (entry as AuthUser).role === 1 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(99, 102, 241, 0.2)',
+              color: (entry as AuthUser).role === 1 ? '#f87171' : '#818cf8',
+            }}
+          >
+            {(entry as AuthUser).role === 1 ? 'Admin' : 'Staff'}
+          </span>
+        ),
+      },
+      {
+        label: 'Created Date',
+        render: entry =>
+          (entry as AuthUser).createdDate
+            ? new Date((entry as AuthUser).createdDate!).toLocaleDateString()
+            : '—',
+      },
+    ],
+  },
 };
 
 function valueFor(field: Field, entry?: Entry): FormValue {
@@ -190,6 +253,9 @@ function valueFor(field: Field, entry?: Entry): FormValue {
 export default function ManagementPage({ resourceKey }: { resourceKey: string }) {
   const resource = resources[resourceKey];
   const { toast } = useToast();
+  const { isAuthenticated, isLoading: authLoading, isAdmin } = useAuth();
+  const router = useRouter();
+
   const [items, setItems] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -199,7 +265,14 @@ export default function ManagementPage({ resourceKey }: { resourceKey: string })
   const [options, setOptions] = useState<Record<string, { value: string; label: string }[]>>({});
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.push('/login');
+    }
+  }, [authLoading, isAuthenticated, router]);
+
   const load = useCallback(async () => {
+    if (!isAuthenticated) return;
     setLoading(true);
     setLoadError('');
     try {
@@ -209,12 +282,14 @@ export default function ManagementPage({ resourceKey }: { resourceKey: string })
     } finally {
       setLoading(false);
     }
-  }, [resource]);
+  }, [resource, isAuthenticated]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    if (isAuthenticated) {
+      const timer = window.setTimeout(() => { void load(); }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [load, isAuthenticated]);
   useEffect(() => {
     let active = true;
     Promise.all(resource.fields.map(async field => field.loadOptions
@@ -266,11 +341,44 @@ export default function ManagementPage({ resourceKey }: { resourceKey: string })
 
   if (!resource) return <div className="container page-header"><h1>Management page not found</h1></div>;
 
+  if (authLoading) {
+    return (
+      <div className="container" style={{ padding: '60px 20px', textAlign: 'center' }}>
+        <span className="spinner" /> Verifying session…
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
+
+  if (resourceKey === 'accounts' && !isAdmin) {
+    return (
+      <div className="container" style={{ padding: '60px 20px', textAlign: 'center' }}>
+        <div className="card" style={{ maxWidth: '500px', margin: '0 auto', padding: '36px' }}>
+          <div style={{ fontSize: '3rem', marginBottom: '12px' }}>🚫</div>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f87171' }}>Access Denied (403)</h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '8px', marginBottom: '24px' }}>
+            Administrator privileges are required to view and manage system accounts.
+          </p>
+          <button onClick={() => router.push('/admin')} className="btn btn-secondary">
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
       <header className="page-header page-heading">
         <div><h1 className="page-title">{resource.title}</h1><p className="page-subtitle">{resource.description}</p></div>
-        <button className="btn btn-primary" onClick={() => openForm()}>＋ Create new</button>
+        {resourceKey !== 'accounts' ? (
+          <button className="btn btn-primary" onClick={() => openForm()}>＋ Create new</button>
+        ) : (
+          <button className="btn btn-secondary" onClick={() => router.push('/register')}>＋ Register New Staff</button>
+        )}
       </header>
 
       {loadError && <div className="error-panel" role="alert"><strong>Could not load records.</strong><p>{loadError}</p><button className="btn btn-secondary btn-sm" onClick={() => void load()}>Try again</button></div>}
