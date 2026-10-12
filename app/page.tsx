@@ -1,5 +1,5 @@
-import { HomeDashboard } from '@/components/PublicPages';
+import { redirect } from 'next/navigation';
 
 export default function Home() {
-  return <HomeDashboard />;
+  redirect('/login');
 }

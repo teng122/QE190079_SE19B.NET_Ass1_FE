@@ -22,7 +22,8 @@ The frontend is available at `http://localhost:3000`.
 
 ## Pages
 
-- `/` — dashboard, summary counts, and active project cards
+- `/` — redirects to the login page
+- `/dashboard` — public dashboard, summary counts, and active project cards
 - `/departments` and `/departments/[id]` — department directory and detail
 - `/projects/[id]` and `/tasks/[id]` — project and task details
 - `/search` — live task filters for title, status, priority, project, and tag
